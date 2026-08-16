@@ -1,11 +1,13 @@
-// ذخیره محلی محصولات
+// =================== ذخیره محلی و متغیرها ===================
 let products = JSON.parse(localStorage.getItem('products')) || [];
 
+// =================== رویدادها ===================
 document.addEventListener('DOMContentLoaded', function() {
     renderProducts();
     updateStats();
 });
 
+// =================== مدیریت محصولات ===================
 function addProduct() {
     const name = document.getElementById('productName').value.trim();
     const url = document.getElementById('productUrl').value.trim();
@@ -50,6 +52,31 @@ function extractSiteName(url) {
     }
 }
 
+function deleteProduct(id) {
+    if (confirm('آیا مطمئن هستید؟')) {
+        products = products.filter(p => p.id !== id);
+        saveProducts();
+        renderProducts();
+        updateStats();
+        showToast('محصول حذف شد');
+    }
+}
+
+function clearAll() {
+    if (confirm('آیا مطمئن هستید که می‌خواهید همه محصولات حذف شوند؟')) {
+        products = [];
+        saveProducts();
+        renderProducts();
+        updateStats();
+        showToast('همه محصولات حذف شدند');
+    }
+}
+
+function saveProducts() {
+    localStorage.setItem('products', JSON.stringify(products));
+}
+
+// =================== رندر و UI ===================
 function renderProducts() {
     const tbody = document.getElementById('productsBody');
     const emptyState = document.getElementById('emptyState');
@@ -87,33 +114,9 @@ function formatPrice(price) {
 }
 
 function getStatusClass(status) {
-    if (status === 'OK' || status === 'موفق') return 'status-ok';
-    if (status.includes('خطا') || status.includes('پیدا نشد')) return 'status-error';
+    if (status === 'OK' || status === 'موفق' || status.includes('موفق')) return 'status-ok';
+    if (status.includes('خطا') || status.includes('پیدا نشد') || status.includes('ناموجود')) return 'status-error';
     return 'status-loading';
-}
-
-function deleteProduct(id) {
-    if (confirm('آیا مطمئن هستید؟')) {
-        products = products.filter(p => p.id !== id);
-        saveProducts();
-        renderProducts();
-        updateStats();
-        showToast('محصول حذف شد');
-    }
-}
-
-function clearAll() {
-    if (confirm('آیا مطمئن هستید که می‌خواهید همه محصولات حذف شوند؟')) {
-        products = [];
-        saveProducts();
-        renderProducts();
-        updateStats();
-        showToast('همه محصولات حذف شدند');
-    }
-}
-
-function saveProducts() {
-    localStorage.setItem('products', JSON.stringify(products));
 }
 
 function updateStats() {
@@ -129,7 +132,55 @@ function updateStats() {
     }
 }
 
-// =================== توابع دریافت قیمت ===================
+// =================== پروکسی و دسترسی ===================
+async function fetchWithProxies(url) {
+    const proxies = [
+        (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+        (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+        (u) => `https://r.jina.ai/${u}`,
+        (u) => `https://proxy.cors.sh/${u}`,
+        (u) => `https://thingproxy.freeboard.io/fetch/${u}`
+    ];
+
+    let lastError = null;
+
+    for (const proxyFn of proxies) {
+        const proxyUrl = proxyFn(url);
+        try {
+            console.log(`تست پروکسی: ${proxyUrl.substring(0, 80)}...`);
+            
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 25000);
+            
+            const res = await fetch(proxyUrl, { 
+                signal: controller.signal,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            });
+            clearTimeout(timeout);
+
+            if (res.ok) {
+                const text = await res.text();
+                if (text && text.length > 500) {
+                    console.log(`✅ پروکسی کار کرد: ${proxyUrl.substring(0, 50)}...`);
+                    return text;
+                }
+                console.warn(`⚠️ پروکسی محتوای کوتاه برگردوند: ${text.length} کاراکتر`);
+            } else {
+                console.warn(`⚠️ پروکسی کد ${res.status} برگردوند`);
+            }
+        } catch (e) {
+            lastError = e;
+            console.warn(`❌ پروکسی خطا داد: ${e.message}`);
+        }
+    }
+    
+    throw new Error(`همه پروکسی‌ها شکست خوردند: ${lastError ? lastError.message : 'نامشخص'}`);
+}
+
+// =================== تشخیص نوع سایت ===================
 async function fetchPrice(url) {
     try {
         if (url.includes('digikala.com')) {
@@ -140,199 +191,201 @@ async function fetchPrice(url) {
             return await fetchGenericPrice(url);
         }
     } catch (error) {
-        console.error('Error fetching price:', error);
-        return { price: null, status: 'خطای شبکه یا CORS' };
+        console.error('خطای عمومی در دریافت قیمت:', error);
+        return { price: null, status: 'خطای شبکه' };
     }
 }
 
-// دریافت HTML از یک URL با چند پروکسی مختلف
-async function fetchWithProxies(url) {
-    const proxies = [
-        // اول corsproxy.io (رایگان، نسبتاً پایدار)
-        (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
-        // بعد allorigins نسخه raw
-        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-        // بعد codetabs
-        (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
-    ];
-
-    for (const proxyFn of proxies) {
-        const proxyUrl = proxyFn(url);
-        try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 15000); // ۱۵ ثانیه timeout
-            const res = await fetch(proxyUrl, { signal: controller.signal });
-            clearTimeout(timeout);
-            if (res.ok) {
-                const text = await res.text();
-                return text;
-            }
-        } catch (e) {
-            console.warn('Proxy failed:', proxyUrl, e.message);
-            continue;
-        }
-    }
-    throw new Error('All proxies failed');
-}
-
-// دیجی‌کالا: دریافت HTML و استخراج با XPath
+// =================== دیجی‌کالا (فقط HTML) ===================
 async function fetchDigikalaPrice(url) {
     try {
-        const html = await fetchWithProxies(url);
+        console.log('شروع دریافت قیمت دیجی‌کالا از:', url);
         
-        // الگوهای مختلف برای قیمت دیجی‌کالا
+        // مطمئن شو URL صفحه محصول است
+        const pageUrl = url.split('?')[0];
+        const html = await fetchWithProxies(pageUrl);
+        
+        console.log(`HTML دیجی‌کالا دریافت شد: ${html.length} کاراکتر`);
+
+        // ---- ۱) جستجو برای قیمت به ریال در JSON ----
+        const rialPatterns = [
+            /"selling_price"\s*:\s*(\d{4,})/,
+            /"rrp_price"\s*:\s*(\d{4,})/,
+            /"discount_price"\s*:\s*(\d{4,})/,
+            /"price"\s*:\s*\{\s*"selling_price"\s*:\s*(\d{4,})/,
+            /"price"\s*:\s*(\d{7,})/
+        ];
+
+        for (const pattern of rialPatterns) {
+            const match = html.match(pattern);
+            if (match) {
+                const rial = parseInt(match[1]);
+                const toman = Math.round(rial / 10);
+                console.log(`قیمت از JSON پیدا شد: ${rial} ریال = ${toman} تومان`);
+                if (toman > 1000 && toman < 500000000) {
+                    return { price: toman, status: 'موفق (JSON)' };
+                }
+            }
+        }
+
+        // ---- ۲) JSON-LD structured data ----
+        const ldMatch = html.match(/"@type"\s*:\s*"Offer"[\s\S]{0,500}?"price"\s*:\s*"?(\d{4,})"?/i);
+        if (ldMatch) {
+            const price = parseInt(ldMatch[1]);
+            const toman = price > 10000 ? Math.round(price / 10) : price;
+            console.log(`قیمت از JSON-LD: ${price} → ${toman} تومان`);
+            if (toman > 1000 && toman < 500000000) {
+                return { price: toman, status: 'موفق (JSON-LD)' };
+            }
+        }
+
+        // ---- ۳) متن فارسی تومان ----
+        const tomanMatches = html.match(/([\d,٬۰-۹]{4,})\s*تومان/g);
+        if (tomanMatches && tomanMatches.length > 0) {
+            const prices = [];
+            for (const match of tomanMatches) {
+                const cleanNum = match
+                    .replace(/[^\d۰-۹]/g, '')
+                    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
+                const price = parseInt(cleanNum);
+                if (price > 1000 && price < 500000000) {
+                    prices.push(price);
+                }
+            }
+            if (prices.length > 0) {
+                const finalPrice = Math.min(...prices);
+                console.log(`قیمت از متن فارسی: ${finalPrice} تومان (از ${prices.length} مورد)`);
+                return { price: finalPrice, status: 'موفق (متن)' };
+            }
+        }
+
+        // ---- ۴) بررسی موجودی ----
+        if (/ناموجود|موجود نیست|out of stock/i.test(html)) {
+            return { price: null, status: 'ناموجود' };
+        }
+
+        // ---- ۵) جستجوی عمومی اعداد ----
+        const numberMatches = html.match(/(\d{6,})/g);
+        if (numberMatches) {
+            const potentialPrices = numberMatches
+                .map(n => parseInt(n))
+                .filter(n => n > 100000 && n < 5000000000)
+                .map(n => Math.round(n / 10))
+                .filter(n => n > 1000 && n < 500000000);
+            
+            if (potentialPrices.length > 0) {
+                const finalPrice = Math.min(...potentialPrices);
+                console.log(`قیمت احتمالی: ${finalPrice} تومان`);
+                return { price: finalPrice, status: 'موفق (تخمین)' };
+            }
+        }
+
+        console.log('هیچ قیمتی پیدا نشد در HTML دیجی‌کالا');
+        return { price: null, status: 'قیمت پیدا نشد' };
+
+    } catch (error) {
+        console.error('خطا در دریافت قیمت دیجی‌کالا:', error);
+        return { price: null, status: 'خطای دسترسی' };
+    }
+}
+
+// =================== ترب ===================
+async function fetchTorobPrice(url) {
+    try {
+        console.log('شروع دریافت قیمت ترب از:', url);
+        
+        const html = await fetchWithProxies(url);
+        console.log(`HTML ترب دریافت شد: ${html.length} کاراکتر`);
+
+        // الگوهای مختلف برای ترب
         const patterns = [
-            // الگوی اصلی قیمت فروش
-            /<span[^>]*data-testid="price-final"[^>]*>([\d,۰-۹]+)/i,
-            /<span[^>]*class="[^"]*color-800[^"]*"[^>]*>([\d,۰-۹]+)/i,
-            // قیمت با تخفیف
-            /<div[^>]*class="[^"]*product-price[^"]*"[^>]*>[\s\S]*?<span[^>]*>([\d,۰-۹]+)/i,
-            // قیمت فروشنده
-            /<div[^>]*class="[^"]*seller-price[^"]*"[^>]*>[\s\S]*?<span[^>]*>([\d,۰-۹]+)/i,
-            // الگوی JSON-LD
-            /"price"\s*:\s*"?([\d,۰-۹]+)"?/i,
-            // الگوی عمومی
-            /([\d,۰-۹]+)\s*تومان/i
+            /<div[^>]*class="[^"]*price[^"]*"[^>]*>[\s\S]{0,200}?([\d,۰-۹]{4,})\s*تومان/i,
+            /<span[^>]*class="[^"]*price[^"]*"[^>]*>([\d,۰-۹]{4,})/i,
+            /<div[^>]*class="[^"]*seller[^"]*"[^>]*>[\s\S]{0,200}?([\d,۰-۹]{4,})/i,
+            /"price"\s*:\s*"?([\d,۰-۹]{4,})"?/i
         ];
         
+        // امتحان الگوهای خاص
         for (const pattern of patterns) {
             const match = html.match(pattern);
             if (match) {
-                let priceStr = match[1];
-                // تمیز کردن قیمت
-                let cleanPrice = priceStr
-                    .replace(/[^\d۰-۹]/g, '') // حذف همه چیز جز اعداد
-                    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0); // تبدیل فارسی به انگلیسی
-                
-                if (cleanPrice && parseInt(cleanPrice) > 1000) { // قیمت منطقی
-                    return { price: parseInt(cleanPrice), status: 'موفق' };
-                }
-            }
-        }
-        
-        // اگه هیچ الگویی کار نکرد، سعی می‌کنیم span هایی که عدد دارن پیدا کنیم
-        const spanMatches = html.match(/<span[^>]*>([\d,۰-۹]+)<\/span>/gi);
-        if (spanMatches) {
-            for (const spanMatch of spanMatches) {
-                const numberMatch = spanMatch.match(/>([\d,۰-۹]+)</);
-                if (numberMatch) {
-                    let cleanPrice = numberMatch[1]
-                        .replace(/[^\d۰-۹]/g, '')
-                        .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
-                    
-                    const price = parseInt(cleanPrice);
-                    // قیمت‌های دیجی‌کالا معمولاً بالای ۱۰۰۰ تومان هستن
-                    if (price > 1000 && price < 100000000) {
-                        return { price: price, status: 'موفق (تخمین)' };
-                    }
-                }
-            }
-        }
-        
-        return { price: null, status: 'قیمت پیدا نشد' };
-    } catch (error) {
-        console.error('Digikala HTML error:', error);
-        return { price: null, status: 'خطا در دسترسی' };
-    }
-}
-
-// ترب: دریافت HTML با الگوهای بهتر
-async function fetchTorobPrice(url) {
-    try {
-        const html = await fetchWithProxies(url);
-        
-        // الگوهای مختلف برای ترب
-        const patterns = [
-            // الگوی اصلی ترب
-            /<div[^>]*class="[^"]*price[^"]*"[^>]*>[\s\S]*?([\d,۰-۹]+)\s*تومان/i,
-            /<span[^>]*class="[^"]*price[^"]*"[^>]*>([\d,۰-۹]+)/i,
-            // الگوی فروشنده
-            /<div[^>]*class="[^"]*seller-price[^"]*"[^>]*>[\s\S]*?([\d,۰-۹]+)/i,
-            // الگوی عمومی تومان
-            /([\d,۰-۹]+)\s*تومان/gi,
-            // JSON در صفحه
-            /"price"\s*:\s*"?([\d,۰-۹]+)"?/i,
-            // الگوی div که عدد داره
-            /<div[^>]*>([\d,۰-۹]+)<\/div>/gi
-        ];
-        
-        // اول الگوهای خاص رو امتحان می‌کنیم
-        for (let i = 0; i < patterns.length - 1; i++) {
-            const pattern = patterns[i];
-            const match = html.match(pattern);
-            if (match) {
-                let priceStr = match[1];
-                let cleanPrice = priceStr
+                const cleanPrice = match[1]
                     .replace(/[^\d۰-۹]/g, '')
                     .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
                 
                 const price = parseInt(cleanPrice);
+                console.log(`قیمت ترب از الگو پیدا شد: ${price} تومان`);
                 if (price > 1000 && price < 100000000) {
                     return { price: price, status: 'موفق' };
                 }
             }
         }
         
-        // آخر هم تمام matches تومان رو چک می‌کنیم
-        const tomanMatches = html.match(/([\d,۰-۹]+)\s*تومان/gi);
-        if (tomanMatches) {
+        // جستجوی عمومی تومان
+        const allTomanMatches = html.match(/([\d,۰-۹]{4,})\s*تومان/gi);
+        if (allTomanMatches) {
             const prices = [];
-            for (const match of tomanMatches) {
-                const numberMatch = match.match(/([\d,۰-۹]+)/);
-                if (numberMatch) {
-                    let cleanPrice = numberMatch[1]
-                        .replace(/[^\d۰-۹]/g, '')
-                        .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
-                    
-                    const price = parseInt(cleanPrice);
-                    if (price > 1000 && price < 100000000) {
-                        prices.push(price);
-                    }
+            for (const match of allTomanMatches) {
+                const cleanPrice = match
+                    .replace(/[^\d۰-۹]/g, '')
+                    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
+                
+                const price = parseInt(cleanPrice);
+                if (price > 1000 && price < 100000000) {
+                    prices.push(price);
                 }
             }
             
             if (prices.length > 0) {
-                // کمترین قیمت رو برمی‌گردونیم (احتمالاً قیمت اصلیه)
-                const minPrice = Math.min(...prices);
-                return { price: minPrice, status: 'موفق (کمترین قیمت)' };
+                const finalPrice = Math.min(...prices);
+                console.log(`قیمت ترب کمترین: ${finalPrice} تومان (از ${prices.length} مورد)`);
+                return { price: finalPrice, status: 'موفق (کمترین)' };
             }
         }
         
-        return { price: null, status: 'قیمت پیدا نشد در HTML' };
+        console.log('قیمت پیدا نشد در HTML ترب');
+        return { price: null, status: 'قیمت پیدا نشد' };
+        
     } catch (error) {
-        console.error('Torob HTML error:', error);
-        return { price: null, status: 'خطا در دسترسی به HTML' };
+        console.error('خطا در دریافت قیمت ترب:', error);
+        return { price: null, status: 'خطای دسترسی' };
     }
 }
 
-// سایت‌های عمومی (مثل بالندر)
+// =================== سایت‌های عمومی ===================
 async function fetchGenericPrice(url) {
     try {
-        const html = await fetchWithProxies(url);
+        console.log('شروع دریافت قیمت عمومی از:', url);
         
-        // الگوهای تشخیص قیمت
+        const html = await fetchWithProxies(url);
+        console.log(`HTML عمومی دریافت شد: ${html.length} کاراکتر`);
+        
+        // الگوهای عمومی
         const patterns = [
-            /"price"\s*:\s*"?([\d.,۰-۹]+)"?/i,
-            /class\s*=\s*["'][^"']*price[^"']*["'][^>]*>([\d.,۰-۹\s]+)/i,
-            /woocommerce-Price-amount[^>]*>([\d.,۰-۹\s]+)/i,
-            /([\d,۰-۹]+)\s*تومان/i
+            /"price"\s*:\s*"?([\d.,۰-۹]{4,})"?/i,
+            /class\s*=\s*["'][^"']*price[^"']*["'][^>]*>([\d.,۰-۹\s]{4,})/i,
+            /woocommerce-Price-amount[^>]*>([\d.,۰-۹\s]{4,})/i,
+            /([\d,۰-۹]{4,})\s*تومان/i
         ];
         
         for (const pattern of patterns) {
             const match = html.match(pattern);
             if (match) {
-                let price = match[1]
+                const cleanPrice = match[1]
                     .replace(/[^\d۰-۹]/g, '')
                     .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
-                if (price && parseInt(price) > 0) {
-                    return { price: parseInt(price), status: 'موفق' };
+                
+                const price = parseInt(cleanPrice);
+                console.log(`قیمت عمومی پیدا شد: ${price}`);
+                if (price > 100 && price < 100000000) {
+                    return { price: price, status: 'موفق' };
                 }
             }
         }
         
         return { price: null, status: 'قیمت پیدا نشد' };
     } catch (error) {
-        console.error('Generic error:', error);
+        console.error('خطا در دریافت قیمت عمومی:', error);
         return { price: null, status: 'خطای دسترسی' };
     }
 }
@@ -359,20 +412,24 @@ async function updateAllPrices() {
             product.status = 'در حال بروزرسانی...';
             renderProducts();
             
+            console.log(`\n=== شروع بروزرسانی ${product.name} ===`);
             const result = await fetchPrice(product.url);
+            console.log(`نتیجه: قیمت=${result.price}, وضعیت=${result.status}`);
+            
             product.price = result.price;
             product.status = result.status;
             product.lastUpdate = Date.now();
             
         } catch (error) {
+            console.error(`خطا در بروزرسانی ${product.name}:`, error);
             product.status = 'خطای شبکه';
         }
         
         renderProducts();
         saveProducts();
         
-        // تاخیر کوتاه
-        await new Promise(resolve => setTimeout(resolve, 1200));
+        // تاخیر بین درخواست‌ها
+        await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
     modal.style.display = 'none';
@@ -411,6 +468,7 @@ function exportToCSV() {
     showToast('فایل CSV دانلود شد! 📊');
 }
 
+// =================== نمایش Toast ===================
 function showToast(message) {
     const toast = document.createElement('div');
     toast.style.cssText = `
