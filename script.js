@@ -1,13 +1,11 @@
 // ذخیره محلی محصولات
 let products = JSON.parse(localStorage.getItem('products')) || [];
 
-// بارگذاری اولیه صفحه
 document.addEventListener('DOMContentLoaded', function() {
     renderProducts();
     updateStats();
 });
 
-// اضافه کردن محصول جدید
 function addProduct() {
     const name = document.getElementById('productName').value.trim();
     const url = document.getElementById('productUrl').value.trim();
@@ -37,15 +35,12 @@ function addProduct() {
     renderProducts();
     updateStats();
     
-    // پاک کردن فرم
     document.getElementById('productName').value = '';
     document.getElementById('productUrl').value = '';
     
-    // نمایش پیام موفقیت
-    showToast('محصول با موفقیت اضافه شد! ✅');
+    showToast('محصول اضافه شد! ✅');
 }
 
-// استخراج نام سایت از URL
 function extractSiteName(url) {
     try {
         const domain = new URL(url).hostname;
@@ -55,7 +50,6 @@ function extractSiteName(url) {
     }
 }
 
-// رندر کردن جدول محصولات
 function renderProducts() {
     const tbody = document.getElementById('productsBody');
     const emptyState = document.getElementById('emptyState');
@@ -87,20 +81,17 @@ function renderProducts() {
     `).join('');
 }
 
-// فرمت قیمت
 function formatPrice(price) {
     if (!price || price === 'خطا') return price || '-';
     return parseInt(price).toLocaleString('fa-IR');
 }
 
-// کلاس وضعیت
 function getStatusClass(status) {
     if (status === 'OK' || status === 'موفق') return 'status-ok';
     if (status.includes('خطا') || status.includes('پیدا نشد')) return 'status-error';
     return 'status-loading';
 }
 
-// حذف محصول
 function deleteProduct(id) {
     if (confirm('آیا مطمئن هستید؟')) {
         products = products.filter(p => p.id !== id);
@@ -111,7 +102,6 @@ function deleteProduct(id) {
     }
 }
 
-// پاک کردن همه
 function clearAll() {
     if (confirm('آیا مطمئن هستید که می‌خواهید همه محصولات حذف شوند؟')) {
         products = [];
@@ -122,30 +112,172 @@ function clearAll() {
     }
 }
 
-// ذخیره محصولات
 function saveProducts() {
     localStorage.setItem('products', JSON.stringify(products));
 }
 
-// بروزرسانی آمار
 function updateStats() {
     const statsDiv = document.getElementById('stats');
-    const productCount = document.getElementById('productCount');
-    const lastUpdate = document.getElementById('lastUpdate');
-    
     if (products.length > 0) {
         statsDiv.style.display = 'flex';
-        productCount.textContent = products.length;
-        
+        document.getElementById('productCount').textContent = products.length;
         const lastUpdateTime = Math.max(...products.map(p => p.lastUpdate || 0));
-        lastUpdate.textContent = lastUpdateTime ? 
+        document.getElementById('lastUpdate').textContent = lastUpdateTime ? 
             new Date(lastUpdateTime).toLocaleString('fa-IR') : 'هرگز';
     } else {
         statsDiv.style.display = 'none';
     }
 }
 
-// بروزرسانی همه قیمت‌ها
+// =================== توابع دریافت قیمت ===================
+async function fetchPrice(url) {
+    try {
+        if (url.includes('digikala.com')) {
+            return await fetchDigikalaPrice(url);
+        } else if (url.includes('torob.com')) {
+            return await fetchTorobPrice(url);
+        } else {
+            return await fetchGenericPrice(url);
+        }
+    } catch (error) {
+        console.error('Error fetching price:', error);
+        return { price: null, status: 'خطای شبکه یا CORS' };
+    }
+}
+
+// دریافت HTML از یک URL با چند پروکسی مختلف
+async function fetchWithProxies(url) {
+    const proxies = [
+        // اول corsproxy.io (رایگان، نسبتاً پایدار)
+        (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+        // بعد allorigins نسخه raw
+        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+        // بعد codetabs
+        (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+    ];
+
+    for (const proxyFn of proxies) {
+        const proxyUrl = proxyFn(url);
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15000); // ۱۵ ثانیه timeout
+            const res = await fetch(proxyUrl, { signal: controller.signal });
+            clearTimeout(timeout);
+            if (res.ok) {
+                const text = await res.text();
+                return text;
+            }
+        } catch (e) {
+            console.warn('Proxy failed:', proxyUrl, e.message);
+            continue;
+        }
+    }
+    throw new Error('All proxies failed');
+}
+
+// دیجی‌کالا: استفاده از API رسمی با پروکسی
+async function fetchDigikalaPrice(url) {
+    const match = url.match(/dkp-(\d+)/);
+    if (!match) return { price: null, status: 'کد محصول پیدا نشد' };
+    
+    const productId = match[1];
+    const apiUrl = `https://api.digikala.com/v2/product/${productId}/`;
+    
+    try {
+        // اول سعی می‌کنیم مستقیم fetch کنیم (شاید CORS داشته باشه)
+        try {
+            const res = await fetch(apiUrl);
+            if (res.ok) {
+                const data = await res.json();
+                const variant = data.data.product.default_variant;
+                if (variant && variant.price) {
+                    const price = Math.round(variant.price.selling_price / 10);
+                    return { price: price, status: 'موفق' };
+                }
+                return { price: null, status: 'قیمت پیدا نشد' };
+            }
+        } catch (e) {
+            // CORS خطا داد، از پروکسی استفاده می‌کنیم
+        }
+        
+        // استفاده از پروکسی
+        const text = await fetchWithProxies(apiUrl);
+        const data = JSON.parse(text);
+        const variant = data.data.product.default_variant;
+        if (variant && variant.price) {
+            const price = Math.round(variant.price.selling_price / 10);
+            return { price: price, status: 'موفق' };
+        }
+        return { price: null, status: 'قیمت پیدا نشد' };
+    } catch (error) {
+        console.error('Digikala error:', error);
+        return { price: null, status: 'خطا در API دیجی‌کالا' };
+    }
+}
+
+// ترب: دریافت HTML و استخراج قیمت
+async function fetchTorobPrice(url) {
+    try {
+        const html = await fetchWithProxies(url);
+        // چند الگو برای قیمت
+        const priceRegexes = [
+            /([\d,۰-۹]+)\s*تومان/g,
+            /class="price"[^>]*>([\d,۰-۹]+)/g,
+            /"price"\s*:\s*"?([\d,۰-۹]+)/g
+        ];
+        
+        for (const regex of priceRegexes) {
+            const match = html.match(regex);
+            if (match && match.length > 0) {
+                let priceText = match[0];
+                let cleanPrice = priceText
+                    .replace(/[^\d۰-۹]/g, '')
+                    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
+                if (cleanPrice && parseInt(cleanPrice) > 0) {
+                    return { price: parseInt(cleanPrice), status: 'موفق' };
+                }
+            }
+        }
+        return { price: null, status: 'قیمت پیدا نشد' };
+    } catch (error) {
+        console.error('Torob error:', error);
+        return { price: null, status: 'خطا در دسترسی به ترب' };
+    }
+}
+
+// سایت‌های عمومی (مثل بالندر)
+async function fetchGenericPrice(url) {
+    try {
+        const html = await fetchWithProxies(url);
+        
+        // الگوهای تشخیص قیمت
+        const patterns = [
+            /"price"\s*:\s*"?([\d.,۰-۹]+)"?/i,
+            /class\s*=\s*["'][^"']*price[^"']*["'][^>]*>([\d.,۰-۹\s]+)/i,
+            /woocommerce-Price-amount[^>]*>([\d.,۰-۹\s]+)/i,
+            /([\d,۰-۹]+)\s*تومان/i
+        ];
+        
+        for (const pattern of patterns) {
+            const match = html.match(pattern);
+            if (match) {
+                let price = match[1]
+                    .replace(/[^\d۰-۹]/g, '')
+                    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
+                if (price && parseInt(price) > 0) {
+                    return { price: parseInt(price), status: 'موفق' };
+                }
+            }
+        }
+        
+        return { price: null, status: 'قیمت پیدا نشد' };
+    } catch (error) {
+        console.error('Generic error:', error);
+        return { price: null, status: 'خطای دسترسی' };
+    }
+}
+
+// =================== بروزرسانی همه ===================
 async function updateAllPrices() {
     if (products.length === 0) {
         alert('محصولی برای بروزرسانی وجود ندارد');
@@ -179,8 +311,8 @@ async function updateAllPrices() {
         renderProducts();
         saveProducts();
         
-        // تاخیر کوتاه بین درخواست‌ها
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // تاخیر کوتاه
+        await new Promise(resolve => setTimeout(resolve, 1200));
     }
     
     modal.style.display = 'none';
@@ -189,113 +321,7 @@ async function updateAllPrices() {
     showToast('بروزرسانی کامل شد! 🎉');
 }
 
-// گرفتن قیمت از یک URL
-async function fetchPrice(url) {
-    try {
-        // تشخیص نوع سایت
-        if (url.includes('digikala.com')) {
-            return await fetchDigikalaPrice(url);
-        } else if (url.includes('torob.com')) {
-            return await fetchTorobPrice(url);
-        } else {
-            return await fetchGenericPrice(url);
-        }
-    } catch (error) {
-        return { price: null, status: 'خطا در دریافت قیمت' };
-    }
-}
-
-// قیمت دیجی‌کالا
-async function fetchDigikalaPrice(url) {
-    const match = url.match(/dkp-(\d+)/);
-    if (!match) return { price: null, status: 'کد محصول پیدا نشد' };
-    
-    const productId = match[1];
-    const apiUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://api.digikala.com/v2/product/${productId}/`)}`;
-    
-    try {
-        const response = await fetch(apiUrl);
-        const data = await response.json();
-        const productData = JSON.parse(data.contents);
-        
-        const variant = productData.data.product.default_variant;
-        if (variant && variant.price) {
-            const price = Math.round(variant.price.selling_price / 10);
-            return { price: price, status: 'موفق' };
-        }
-        return { price: null, status: 'قیمت پیدا نشد' };
-    } catch (error) {
-        return { price: null, status: 'خطا در API دیجی‌کالا' };
-    }
-}
-
-// قیمت ترب (با CORS proxy)
-async function fetchTorobPrice(url) {
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-    
-    try {
-        const response = await fetch(proxyUrl);
-        const data = await response.json();
-        const html = data.contents;
-        
-        // جستجو برای قیمت در HTML
-        const priceRegex = /([\d,۰-۹]+)\s*تومان/g;
-        const matches = html.match(priceRegex);
-        
-        if (matches && matches.length > 0) {
-            const priceText = matches[0];
-            const cleanPrice = priceText
-                .replace(/[^\d۰-۹]/g, '')
-                .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
-            
-            if (cleanPrice) {
-                return { price: parseInt(cleanPrice), status: 'موفق' };
-            }
-        }
-        
-        return { price: null, status: 'قیمت پیدا نشد' };
-    } catch (error) {
-        return { price: null, status: 'خطا در دسترسی به ترب' };
-    }
-}
-
-// قیمت سایت‌های عمومی
-async function fetchGenericPrice(url) {
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-    
-    try {
-        const response = await fetch(proxyUrl);
-        const data = await response.json();
-        const html = data.contents;
-        
-        // الگوهای مختلف برای تشخیص قیمت
-        const patterns = [
-            /"price"\s*:\s*"?([\d.,۰-۹]+)"?/i,
-            /class\s*=\s*["'][^"']*price[^"']*["'][^>]*>([\d.,۰-۹\s]+)/i,
-            /woocommerce-Price-amount[^>]*>([\d.,۰-۹\s]+)/i,
-            /([\d,۰-۹]+)\s*تومان/i
-        ];
-        
-        for (const pattern of patterns) {
-            const match = html.match(pattern);
-            if (match) {
-                let price = match[1]
-                    .replace(/[^\d۰-۹]/g, '')
-                    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
-                
-                if (price && parseInt(price) > 0) {
-                    return { price: parseInt(price), status: 'موفق' };
-                }
-            }
-        }
-        
-        return { price: null, status: 'قیمت پیدا نشد' };
-    } catch (error) {
-        return { price: null, status: 'خطای دسترسی' };
-    }
-}
-
-// Export به CSV
+// =================== Export ===================
 function exportToCSV() {
     if (products.length === 0) {
         alert('محصولی برای خروجی وجود ندارد');
@@ -325,9 +351,7 @@ function exportToCSV() {
     showToast('فایل CSV دانلود شد! 📊');
 }
 
-// نمایش Toast
 function showToast(message) {
-    // ساخت element موقت
     const toast = document.createElement('div');
     toast.style.cssText = `
         position: fixed;
@@ -344,15 +368,8 @@ function showToast(message) {
         transition: transform 0.3s;
     `;
     toast.textContent = message;
-    
     document.body.appendChild(toast);
-    
-    // انیمیشن ورود
-    setTimeout(() => {
-        toast.style.transform = 'translateX(0)';
-    }, 100);
-    
-    // حذف خودکار
+    setTimeout(() => toast.style.transform = 'translateX(0)', 100);
     setTimeout(() => {
         toast.style.transform = 'translateX(100%)';
         setTimeout(() => toast.remove(), 300);
