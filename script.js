@@ -175,73 +175,133 @@ async function fetchWithProxies(url) {
     throw new Error('All proxies failed');
 }
 
-// دیجی‌کالا: استفاده از API رسمی با پروکسی
+// دیجی‌کالا: دریافت HTML و استخراج با XPath
 async function fetchDigikalaPrice(url) {
-    const match = url.match(/dkp-(\d+)/);
-    if (!match) return { price: null, status: 'کد محصول پیدا نشد' };
-    
-    const productId = match[1];
-    const apiUrl = `https://api.digikala.com/v2/product/${productId}/`;
-    
-    try {
-        // اول سعی می‌کنیم مستقیم fetch کنیم (شاید CORS داشته باشه)
-        try {
-            const res = await fetch(apiUrl);
-            if (res.ok) {
-                const data = await res.json();
-                const variant = data.data.product.default_variant;
-                if (variant && variant.price) {
-                    const price = Math.round(variant.price.selling_price / 10);
-                    return { price: price, status: 'موفق' };
-                }
-                return { price: null, status: 'قیمت پیدا نشد' };
-            }
-        } catch (e) {
-            // CORS خطا داد، از پروکسی استفاده می‌کنیم
-        }
-        
-        // استفاده از پروکسی
-        const text = await fetchWithProxies(apiUrl);
-        const data = JSON.parse(text);
-        const variant = data.data.product.default_variant;
-        if (variant && variant.price) {
-            const price = Math.round(variant.price.selling_price / 10);
-            return { price: price, status: 'موفق' };
-        }
-        return { price: null, status: 'قیمت پیدا نشد' };
-    } catch (error) {
-        console.error('Digikala error:', error);
-        return { price: null, status: 'خطا در API دیجی‌کالا' };
-    }
-}
-
-// ترب: دریافت HTML و استخراج قیمت
-async function fetchTorobPrice(url) {
     try {
         const html = await fetchWithProxies(url);
-        // چند الگو برای قیمت
-        const priceRegexes = [
-            /([\d,۰-۹]+)\s*تومان/g,
-            /class="price"[^>]*>([\d,۰-۹]+)/g,
-            /"price"\s*:\s*"?([\d,۰-۹]+)/g
+        
+        // الگوهای مختلف برای قیمت دیجی‌کالا
+        const patterns = [
+            // الگوی اصلی قیمت فروش
+            /<span[^>]*data-testid="price-final"[^>]*>([\d,۰-۹]+)/i,
+            /<span[^>]*class="[^"]*color-800[^"]*"[^>]*>([\d,۰-۹]+)/i,
+            // قیمت با تخفیف
+            /<div[^>]*class="[^"]*product-price[^"]*"[^>]*>[\s\S]*?<span[^>]*>([\d,۰-۹]+)/i,
+            // قیمت فروشنده
+            /<div[^>]*class="[^"]*seller-price[^"]*"[^>]*>[\s\S]*?<span[^>]*>([\d,۰-۹]+)/i,
+            // الگوی JSON-LD
+            /"price"\s*:\s*"?([\d,۰-۹]+)"?/i,
+            // الگوی عمومی
+            /([\d,۰-۹]+)\s*تومان/i
         ];
         
-        for (const regex of priceRegexes) {
-            const match = html.match(regex);
-            if (match && match.length > 0) {
-                let priceText = match[0];
-                let cleanPrice = priceText
-                    .replace(/[^\d۰-۹]/g, '')
-                    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
-                if (cleanPrice && parseInt(cleanPrice) > 0) {
+        for (const pattern of patterns) {
+            const match = html.match(pattern);
+            if (match) {
+                let priceStr = match[1];
+                // تمیز کردن قیمت
+                let cleanPrice = priceStr
+                    .replace(/[^\d۰-۹]/g, '') // حذف همه چیز جز اعداد
+                    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0); // تبدیل فارسی به انگلیسی
+                
+                if (cleanPrice && parseInt(cleanPrice) > 1000) { // قیمت منطقی
                     return { price: parseInt(cleanPrice), status: 'موفق' };
                 }
             }
         }
+        
+        // اگه هیچ الگویی کار نکرد، سعی می‌کنیم span هایی که عدد دارن پیدا کنیم
+        const spanMatches = html.match(/<span[^>]*>([\d,۰-۹]+)<\/span>/gi);
+        if (spanMatches) {
+            for (const spanMatch of spanMatches) {
+                const numberMatch = spanMatch.match(/>([\d,۰-۹]+)</);
+                if (numberMatch) {
+                    let cleanPrice = numberMatch[1]
+                        .replace(/[^\d۰-۹]/g, '')
+                        .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
+                    
+                    const price = parseInt(cleanPrice);
+                    // قیمت‌های دیجی‌کالا معمولاً بالای ۱۰۰۰ تومان هستن
+                    if (price > 1000 && price < 100000000) {
+                        return { price: price, status: 'موفق (تخمین)' };
+                    }
+                }
+            }
+        }
+        
         return { price: null, status: 'قیمت پیدا نشد' };
     } catch (error) {
-        console.error('Torob error:', error);
-        return { price: null, status: 'خطا در دسترسی به ترب' };
+        console.error('Digikala HTML error:', error);
+        return { price: null, status: 'خطا در دسترسی' };
+    }
+}
+
+// ترب: دریافت HTML با الگوهای بهتر
+async function fetchTorobPrice(url) {
+    try {
+        const html = await fetchWithProxies(url);
+        
+        // الگوهای مختلف برای ترب
+        const patterns = [
+            // الگوی اصلی ترب
+            /<div[^>]*class="[^"]*price[^"]*"[^>]*>[\s\S]*?([\d,۰-۹]+)\s*تومان/i,
+            /<span[^>]*class="[^"]*price[^"]*"[^>]*>([\d,۰-۹]+)/i,
+            // الگوی فروشنده
+            /<div[^>]*class="[^"]*seller-price[^"]*"[^>]*>[\s\S]*?([\d,۰-۹]+)/i,
+            // الگوی عمومی تومان
+            /([\d,۰-۹]+)\s*تومان/gi,
+            // JSON در صفحه
+            /"price"\s*:\s*"?([\d,۰-۹]+)"?/i,
+            // الگوی div که عدد داره
+            /<div[^>]*>([\d,۰-۹]+)<\/div>/gi
+        ];
+        
+        // اول الگوهای خاص رو امتحان می‌کنیم
+        for (let i = 0; i < patterns.length - 1; i++) {
+            const pattern = patterns[i];
+            const match = html.match(pattern);
+            if (match) {
+                let priceStr = match[1];
+                let cleanPrice = priceStr
+                    .replace(/[^\d۰-۹]/g, '')
+                    .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
+                
+                const price = parseInt(cleanPrice);
+                if (price > 1000 && price < 100000000) {
+                    return { price: price, status: 'موفق' };
+                }
+            }
+        }
+        
+        // آخر هم تمام matches تومان رو چک می‌کنیم
+        const tomanMatches = html.match(/([\d,۰-۹]+)\s*تومان/gi);
+        if (tomanMatches) {
+            const prices = [];
+            for (const match of tomanMatches) {
+                const numberMatch = match.match(/([\d,۰-۹]+)/);
+                if (numberMatch) {
+                    let cleanPrice = numberMatch[1]
+                        .replace(/[^\d۰-۹]/g, '')
+                        .replace(/[۰-۹]/g, d => d.charCodeAt(0) - 0x06F0);
+                    
+                    const price = parseInt(cleanPrice);
+                    if (price > 1000 && price < 100000000) {
+                        prices.push(price);
+                    }
+                }
+            }
+            
+            if (prices.length > 0) {
+                // کمترین قیمت رو برمی‌گردونیم (احتمالاً قیمت اصلیه)
+                const minPrice = Math.min(...prices);
+                return { price: minPrice, status: 'موفق (کمترین قیمت)' };
+            }
+        }
+        
+        return { price: null, status: 'قیمت پیدا نشد در HTML' };
+    } catch (error) {
+        console.error('Torob HTML error:', error);
+        return { price: null, status: 'خطا در دسترسی به HTML' };
     }
 }
 
