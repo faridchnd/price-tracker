@@ -391,7 +391,7 @@ async function fetchGenericPrice(url) {
 }
 
 // =================== بروزرسانی همه ===================
-async function updateAllPrices() {
+console.log('=== شروع بروزرسانی همه ===');async function updateAllPrices() {
     if (products.length === 0) {
         alert('محصولی برای بروزرسانی وجود ندارد');
         return;
